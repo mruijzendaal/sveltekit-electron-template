@@ -8,17 +8,46 @@
 	"scripts": {
 		"dev": "electron . --dev",
 		"build": "vite build",
+		"package:mac": "npm run build && env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --publish never",
+		"package:win": "npm run build && electron-builder --win dir --publish never",
 		"start": "npm run build && electron .",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
 	},
+	"build": {
+		"appId": "com.svelteelectron.app",
+		"productName": "Svelte Electron",
+		"directories": {
+			"output": "dist",
+			"buildResources": "electron"
+		},
+		"files": [
+			"build/**/*",
+			"electron/**/*",
+			"package.json"
+		],
+		"mac": {
+			"target": [
+				"dir"
+			],
+			"identity": null,
+			"category": "public.app-category.developer-tools"
+		},
+		"win": {
+			"target": [
+				"dir"
+			],
+			"signAndEditExecutable": false
+		}
+	},
 	"devDependencies": {
 		"@sveltejs/adapter-node": "^5.5.4",
 		"@sveltejs/kit": "^2.57.0",
 		"@sveltejs/vite-plugin-svelte": "^7.0.0",
 		"electron": "^41.2.0",
+		"electron-builder": "^26.8.1",
 		"svelte": "^5.55.2",
 		"svelte-check": "^4.4.6",
 		"typescript": "^6.0.2",

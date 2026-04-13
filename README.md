@@ -19,8 +19,40 @@ app into static files.
 npm run dev
 npm run check
 npm run build
+npm run package:mac
+npm run package:win
 npm run start
 ```
+
+## Packaging for macOS
+
+Run the packaging build with:
+
+```sh
+npm run package:mac
+```
+
+This writes an unsigned `.app` bundle to `dist/mac*/Svelte Electron.app`, ready to copy to another
+Mac.
+
+Because the bundle is unsigned, macOS Gatekeeper may still warn when it is opened on another Mac.
+For a frictionless double-click install, you would need to add Apple code signing and notarization.
+
+## Packaging for Windows
+
+Run the packaging build with:
+
+```sh
+npm run package:win
+```
+
+This writes an unsigned unpacked Windows app to `dist/win-*-unpacked/`, ready to copy to a Windows
+machine. On Apple silicon Macs, the default output is `dist/win-arm64-unpacked/`.
+
+Because the build is unsigned, Windows SmartScreen may still warn when it is launched. For a
+frictionless install, you would need to add Windows code signing. The Windows build also disables
+`rcedit` metadata/signing edits so it can be cross-built from macOS without requiring a local Wine
+setup.
 
 ## Files to know
 
