@@ -1,20 +1,23 @@
-import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { createServer } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
+import { createServer as createNetServer } from 'node:net';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, powerMonitor } from 'electron';
 
-const DEV_SERVER_URL = process.env.ELECTRON_RENDERER_URL;
 const HOST = '127.0.0.1';
 const SERVER_START_TIMEOUT_MS = 15_000;
+const SYSTEM_IDLE_THRESHOLD = 60;
+const IS_DEV = process.argv.includes('--dev');
 
-let serverProcess;
+let appServer;
 let serverUrlPromise;
+let viteServer;
 let isQuitting = false;
 
-function getBuildEntry() {
-	return join(app.getAppPath(), 'build', 'index.js');
+function getBuildHandlerEntry() {
+	return join(app.getAppPath(), 'build', 'handler.js');
 }
 
 function getPreloadPath() {
@@ -23,7 +26,7 @@ function getPreloadPath() {
 
 function getAvailablePort() {
 	return new Promise((resolve, reject) => {
-		const server = createServer();
+		const server = createNetServer();
 
 		server.unref();
 		server.on('error', reject);
@@ -42,6 +45,16 @@ function getAvailablePort() {
 
 function sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function registerPowerMonitorEvents() {
+	// Power monitor events are tracked by the powerMonitor API itself.
+}
+
+function exposeElectronApis() {
+	globalThis.__electronServer = {
+		powerMonitor
+	};
 }
 
 async function waitForServer(url) {
@@ -64,47 +77,80 @@ async function waitForServer(url) {
 	throw new Error(`Timed out waiting for the SvelteKit server at ${url}.`);
 }
 
-function stopSvelteKitServer() {
-	if (serverProcess && !serverProcess.killed) {
-		serverProcess.kill();
+async function stopAppServer() {
+	const stopTasks = [];
+
+	if (viteServer) {
+		stopTasks.push(viteServer.close());
+		viteServer = undefined;
 	}
 
-	serverProcess = undefined;
+	if (appServer) {
+		stopTasks.push(
+			new Promise((resolve, reject) => {
+				appServer.close((error) => {
+					if (error) {
+						reject(error);
+						return;
+					}
+
+					resolve(undefined);
+				});
+			})
+		);
+		appServer = undefined;
+	}
+
 	serverUrlPromise = undefined;
+	await Promise.all(stopTasks);
 }
 
-async function startSvelteKitServer() {
-	const buildEntry = getBuildEntry();
+async function startDevelopmentServer(port) {
+	const { createServer } = await import('vite');
 
-	if (!existsSync(buildEntry)) {
-		throw new Error('SvelteKit build output was not found. Run "npm run build" before "npm run start".');
+	viteServer = await createServer({
+		clearScreen: false,
+		root: app.getAppPath(),
+		server: {
+			host: HOST,
+			port,
+			strictPort: true
+		}
+	});
+
+	await viteServer.listen();
+}
+
+async function startProductionServer(port) {
+	const buildHandlerEntry = getBuildHandlerEntry();
+
+	if (!existsSync(buildHandlerEntry)) {
+		throw new Error(
+			'SvelteKit build output was not found. Run "npm run build" before "npm run start".'
+		);
 	}
 
+	const { handler } = await import(pathToFileURL(buildHandlerEntry).href);
+
+	appServer = createHttpServer((request, response) => {
+		handler(request, response);
+	});
+
+	await new Promise((resolve, reject) => {
+		appServer.once('error', reject);
+		appServer.listen(port, HOST, resolve);
+	});
+}
+
+async function startAppServer() {
 	const port = await getAvailablePort();
 	const origin = `http://${HOST}:${port}`;
 
-	serverProcess = spawn(process.execPath, [buildEntry], {
-		env: {
-			...process.env,
-			ELECTRON_RUN_AS_NODE: '1',
-			HOST,
-			ORIGIN: origin,
-			PORT: String(port)
-		},
-		stdio: 'inherit'
-	});
-
-	serverProcess.once('exit', (code, signal) => {
-		serverProcess = undefined;
-		serverUrlPromise = undefined;
-
-		if (!isQuitting) {
-			console.error(
-				`The bundled SvelteKit server exited unexpectedly (code: ${code ?? 'null'}, signal: ${signal ?? 'null'}).`
-			);
-			app.quit();
-		}
-	});
+	if (IS_DEV) {
+		await startDevelopmentServer(port);
+	} else {
+		await startProductionServer(port);
+	}
 
 	await waitForServer(origin);
 
@@ -112,11 +158,7 @@ async function startSvelteKitServer() {
 }
 
 function getAppUrl() {
-	if (DEV_SERVER_URL) {
-		return Promise.resolve(DEV_SERVER_URL);
-	}
-
-	serverUrlPromise ??= startSvelteKitServer();
+	serverUrlPromise ??= startAppServer();
 	return serverUrlPromise;
 }
 
@@ -137,7 +179,7 @@ async function createMainWindow() {
 	const appUrl = await getAppUrl();
 	await window.loadURL(appUrl);
 
-	if (DEV_SERVER_URL) {
+	if (IS_DEV) {
 		window.webContents.openDevTools({ mode: 'detach' });
 	}
 }
@@ -153,20 +195,20 @@ async function boot() {
 
 app.on('before-quit', () => {
 	isQuitting = true;
-	stopSvelteKitServer();
+	void stopAppServer();
 });
 
 app.on('window-all-closed', () => {
-	if (process.platform !== 'darwin') {
-		app.quit();
-	}
+	app.quit();
 });
 
 app.whenReady().then(async () => {
+	registerPowerMonitorEvents();
+	exposeElectronApis();
 	await boot();
 
 	app.on('activate', async () => {
-		if (BrowserWindow.getAllWindows().length === 0) {
+		if (BrowserWindow.getAllWindows().length === 0 && !isQuitting) {
 			await boot();
 		}
 	});
